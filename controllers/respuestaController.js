@@ -1,31 +1,26 @@
-// controllers/respuestaController.js
-
 import Respuesta from "../models/Respuesta.js";
 import Actividad from "../models/Actividad.js";
 import { sendEmail } from "../utils/sendEmail.js";
+import User from "../models/User.js";
 
 // ================================
 // 1) Enviar o actualizar evidencia de una respuesta
 // ================================
 export const enviarRespuesta = async (req, res) => {
   try {
-    // 1) Tomar aprendizId de req.body, luego de req.query, luego de req.user._id
     let aprendizId = null;
     if (req.body.aprendizId) {
       aprendizId = req.body.aprendizId;
     } else if (req.query.aprendizId) {
       aprendizId = req.query.aprendizId;
-    } else if (req.user && req.user._id) {
-      aprendizId = req.user._id;
     }
 
     if (!aprendizId) {
       return res.status(400).json({ message: "Falta id de aprendiz" });
     }
 
-    // si usuario tiene estado inactivo
-
-    const user = await User.findById(req.user._id);
+    // ✅ Usar aprendizId directamente para verificar el estado del usuario
+    const user = await User.findById(aprendizId);
     if (!user || user.estado !== 'activo') {
       return res.status(403).json({
         message: "Tu cuenta está inactiva. No puedes enviar actividades."
@@ -38,38 +33,34 @@ export const enviarRespuesta = async (req, res) => {
       return res.status(404).json({ message: "Actividad no encontrada" });
     }
 
-    // Verificar si la fecha límite ya pasó
     const fechaActual = new Date();
     const fechaLimite = new Date(actividad.fechaLimite);
-    
+
     if (fechaActual > fechaLimite) {
-      return res.status(400).json({ 
-        message: `La fecha límite para esta actividad (${fechaLimite.toLocaleDateString()}) ya ha pasado` 
+      return res.status(400).json({
+        message: `La fecha límite para esta actividad (${fechaLimite.toLocaleDateString()}) ya ha pasado`
       });
     }
-    
-    // 2) Subida de archivo de evidencia
-    let archivoEvidencia = null;
-    if (req.file) {
-      archivoEvidencia = {
-        filename: req.file.filename,
-        originalname: req.file.originalname,
-        url: `/uploads/respuestas/${req.file.filename}`,
-      };
-    } else {
+
+    // Validación de archivo
+    if (!req.file) {
       return res
         .status(400)
         .json({ message: "Debe adjuntar un archivo de evidencia" });
     }
 
-    // 3) Crear o actualizar si ya existe una respuesta de este aprendiz a la misma actividad
+    const archivoEvidencia = {
+      filename: req.file.filename,
+      originalname: req.file.originalname,
+      url: `/uploads/respuestas/${req.file.filename}`,
+    };
+
     let respuesta = await Respuesta.findOne({
       actividad: actividadId,
       aprendiz: aprendizId,
     });
 
     if (respuesta) {
-      // Sobrescribimos la evidencia anterior
       respuesta.archivoEvidencia = archivoEvidencia;
       respuesta.fechaEnvio = Date.now();
       respuesta.estado = "Pendiente";
@@ -108,10 +99,12 @@ export const obtenerRespuestasPorAprendiz = async (req, res) => {
     }
 
     // 2.2) Buscar todas las respuestas de ese aprendiz
-    //       y poblar solo el nombre de la actividad
-    const respuestas = await Respuesta.find({ aprendiz: aprendizId })
-      .populate("actividad", "nombre") // trae { _id, nombre } de la actividad
+    let respuestas = await Respuesta.find({ aprendiz: aprendizId })
+      .populate("actividad", "_id nombre") // <-- Aseguramos que venga _id también
       .sort({ createdAt: -1 });
+
+    // 2.3) Filtrar posibles respuestas con actividad eliminada
+    respuestas = respuestas.filter((r) => r.actividad && r.actividad._id);
 
     return res.json(respuestas);
   } catch (error) {
